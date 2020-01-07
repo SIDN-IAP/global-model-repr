@@ -4,7 +4,7 @@ Repository for the session on global-, model-, and representation-level interpre
 ## Outline
 
 ### Probing classifiers for NLP models
-1. Experiment 1 (20 minutes):
+1. Experiment 1 (15 minutes):
    - Load one pretrained model from the [Transformers library](https://huggingface.co/transformers/index.html)
    - Load dataset of texts with part-of-speech (POS) annotations
    - Run pretrained model on texts and extract representations
