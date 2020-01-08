@@ -21,4 +21,16 @@ Repository for the session on global-, model-, and representation-level interpre
    - Sentence-level properties using aggregation of word-level representations or using sentence tokens
    - [Structural probe](https://github.com/john-hewitt/structural-probes/)
    - Methods for finding linguistic information in attention weights
-   - Other models from the Transformers library 
+   - Other models from the Transformers library
+
+### Understanding units of vision models
+1. Examining units of a classifier.
+   - Load a pretrained VGG classifier trained to classify scenes.
+   - Load a dataset of scene images, as well as a pretrained segmentation network.
+   - Run the classifier on the scene images to visualize top-activating images for each unit.
+   - Count agreement between segmentation classes and units to identify unit semantics.
+2. Examining units of a GAN generator.
+   - Repeat the same, but for a pretrained GAN generator trained to generate scenes.
+   - Examine units accross layers.
+3. Test units using interventions.
+
