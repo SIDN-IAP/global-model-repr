@@ -131,7 +131,7 @@ class UnifiedParsingSegmenter(BaseSegmenter):
         segvocab = 'upp'
         segarch = ('resnet50', 'upernet')
         epoch = 40
-        ensure_upp_segmenter_downloaded('datasets/segmodel')
+        ensure_segmenter_downloaded('datasets/segmodel', 'upp')
         segmodel = load_unified_parsing_segmentation_model(
                 segarch, segvocab, epoch)
         segmodel.cuda()
@@ -612,10 +612,16 @@ def load_segmentation_model(modeldir, segmodel_arch, segvocab, epoch=None):
     segmodel.eval()
     return segmodel
 
-def ensure_upp_segmenter_downloaded(directory):
+def ensure_segmenter_downloaded(directory, segvocab):
     baseurl = 'http://netdissect.csail.mit.edu/data/segmodel'
-    dirname = 'upp-resnet50-upernet'
-    files = ['decoder_epoch_40.pth', 'encoder_epoch_40.pth', 'labels.json']
+    if segvocab == 'upp':
+        dirname = 'upp-resnet50-upernet'
+        files = ['decoder_epoch_40.pth', 'encoder_epoch_40.pth', 'labels.json']
+    elif segvocab == 'color':
+        dirname = 'color-resnet18dilated-ppm_deepsup'
+        files = ['decoder_epoch_20.pth', 'encoder_epoch_20.pth', 'labels.json']
+    else:
+        assert False, segvocab
     download_dir = os.path.join(directory, dirname)
     os.makedirs(download_dir, exist_ok=True)
     for fn in files:
