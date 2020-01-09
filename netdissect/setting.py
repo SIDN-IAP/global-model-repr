@@ -1,5 +1,6 @@
 import torch, torchvision, os, collections
-from . import parallelfolder, zdataset, renormalize, encoder_net
+from . import parallelfolder, zdataset, renormalize, encoder_net, segmenter
+from . import bargraph
 
 def load_proggan(domain):
     # Automatically download and cache progressive GAN model
@@ -171,6 +172,60 @@ g_places_transform = torchvision.transforms.Compose([
     torchvision.transforms.CenterCrop(224),
     torchvision.transforms.ToTensor(),
     renormalize.NORMALIZER['places_meanonly']])
+
+def load_segmenter(segmenter_name='netpqc'):
+    '''Loads the segementer.'''
+    all_parts = ('p' in segmenter_name)
+    quad_seg = ('q' in segmenter_name)
+    textures = ('x' in segmenter_name)
+    colors = ('c' in segmenter_name)
+
+    segmodels = []
+    segmodels.append(segmenter.UnifiedParsingSegmenter(segsizes=[256],
+            all_parts=all_parts,
+            segdiv=('quad' if quad_seg else None)))
+    if textures:
+        segmenter.ensure_segmenter_downloaded('datasets/segmodel', 'texture')
+        segmodels.append(segmenter.SemanticSegmenter(
+            segvocab="texture", segarch=("resnet18dilated", "ppm_deepsup")))
+    if colors:
+        segmenter.ensure_segmenter_downloaded('datasets/segmodel', 'color')
+        segmodels.append(segmenter.SemanticSegmenter(
+            segvocab="color", segarch=("resnet18dilated", "ppm_deepsup")))
+    if len(segmodels) == 1:
+        segmodel = segmodels[0]
+    else:
+        segmodel = segmenter.MergedSegmenter(segmodels)
+    seglabels = [l for l, c in segmodel.get_label_and_category_names()[0]]
+    segcatlabels = segmodel.get_label_and_category_names()[0]
+    return segmodel, seglabels, segcatlabels
+
+def graph_conceptcatlist(conceptcatlist, **kwargs):
+    count = collections.defaultdict(int)
+    catcount = collections.defaultdict(int)
+    for c in conceptcatlist:
+        count[c] += 1
+    for c in count.keys():
+        catcount[c[1]] += 1
+    cats = ['object', 'part', 'material', 'texture', 'color']
+    catorder = dict((c, i) for i, c in enumerate(cats))
+    sorted_labels = sorted(count.keys(),
+        key=lambda x: (catorder[x[1]], -count[x]))
+    sorted_labels
+    return bargraph.make_svg_bargraph(
+        [label for label, cat in sorted_labels],
+        [count[k] for k in sorted_labels],
+        [(c, catcount[c]) for c in cats], **kwargs)
+
+def save_concept_graph(filename, conceptlist):
+    svg = graph_conceptlist(conceptlist, file_header=True)
+    with open(filename, 'w') as f:
+        f.write(svg)
+
+def save_conceptcat_graph(filename, conceptcatlist):
+    svg = graph_conceptcatlist(conceptcatlist, barheight=80, file_header=True)
+    with open(filename, 'w') as f:
+        f.write(svg)
 
 def load_test_image(imgnum, split, model, full=False):
     if split == 'gan':
