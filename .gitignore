@@ -31,6 +31,10 @@ MANIFEST
 models/
 datasets/
 results/
+notebooks/models
+notebooks/datasets
+notebooks/results
+notebooks/netdissect
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
