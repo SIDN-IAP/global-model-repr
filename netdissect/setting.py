@@ -62,6 +62,7 @@ def load_vgg16(domain='places'):
         sd = torch.hub.model_zoo.load_url(url) # pytorch 1.0
 
     model.load_state_dict(sd)
+    model.eval()
     return model
 
 
