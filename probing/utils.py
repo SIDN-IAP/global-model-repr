@@ -97,17 +97,17 @@ def get_sentence_repr(sentence, model, tokenizer, sep, model_name, device):
         sys.exit()
 
     all_hidden_states = all_hidden_states[:, mask]
-    all_hidden_states = torch.tensor(all_hidden_states)
+    # all_hidden_states = torch.tensor(all_hidden_states).to(device)
 
     return all_hidden_states
 
 
-def get_pos_data(probing_dir, frac=1.0):
+def get_pos_data(probing_dir, frac=1.0, device='cpu'):
 
-    return get_data("pos", probing_dir=probing_dir, frac=frac)
+    return get_data("pos", probing_dir=probing_dir, frac=frac, device=device)
 
 
-def get_data(data_type, probing_dir, data_pref=UD_EN_PREF, frac=1.0):
+def get_data(data_type, probing_dir, data_pref=UD_EN_PREF, frac=1.0, device='cpu'):
 
     with open(os.path.join(probing_dir, DATA_DIR, data_pref + "train.txt")) as f:
         train_sentences = [line.strip().split() for line in f.readlines()]
@@ -136,9 +136,9 @@ def get_data(data_type, probing_dir, data_pref=UD_EN_PREF, frac=1.0):
     for label in unique_labels:
         label2index[label] = label2index.get(label, len(label2index))
 
-    train_labels = [torch.LongTensor([label2index[l] for l in labels]) for labels in train_labels]
-    test_labels = [torch.LongTensor([label2index[l] for l in labels]) for labels in test_labels]
-    dev_labels = [torch.LongTensor([label2index[l] for l in labels]) for labels in dev_labels]
+    train_labels = [[label2index[l] for l in labels] for labels in train_labels]
+    test_labels = [[label2index[l] for l in labels] for labels in test_labels]
+    dev_labels = [[label2index[l] for l in labels] for labels in dev_labels]
 
 
     return train_sentences, train_labels, test_sentences, test_labels, dev_sentences, dev_labels, label2index
