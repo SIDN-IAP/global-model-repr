@@ -515,8 +515,9 @@ class Div(Widget):
         self.style = Property(style)
         self.click = Trigger()
 
-    def print(self, text, replace=False):
-        newHTML = '<pre>%s</pre>' % html.escape(str(text));
+    def print(self, *args, replace=False):
+        newHTML = '<pre>%s</pre>' % ' '.join(
+                html.escape(str(text)) for text in args)
         if replace:
             self.innerHTML = newHTML
         else:
@@ -620,7 +621,11 @@ function getChan(obj_id) {
       var args = ev.content.data.slice(1);
       for (fn of chan) { fn.apply(null, args); }
     });
-    chan.retry = setInterval(() => { chan.comm.open(); }, 2000);
+    chan.retries = 5;
+    chan.retry = setInterval(() => {
+      if (chan.retries) { chan.retries -= 1; chan.comm.open(); }
+      else { clearInterval(chan.retry); chan.retry = null; }
+    }, 2000);
   }
   return chan;
 }
