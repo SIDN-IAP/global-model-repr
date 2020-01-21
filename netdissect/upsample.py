@@ -34,7 +34,7 @@ def upsampler(target_shape, data_shape=None,
             batch_grid = batch_grid.to(data.device)
         try:
             return torch.nn.functional.grid_sample(data, batch_grid, mode=mode,
-                padding_mode=padding_mode, align_corners=False)
+                padding_mode=padding_mode, align_corners=True)
         except:
             # no align_corners in older pytorch.
             return torch.nn.functional.grid_sample(data, batch_grid, mode=mode,
