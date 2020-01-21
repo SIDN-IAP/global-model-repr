@@ -32,13 +32,8 @@ def upsampler(target_shape, data_shape=None,
             batch_grid = grid.expand((data.shape[0],) + grid.shape[1:])
         if batch_grid.device != data.device:
             batch_grid = batch_grid.to(data.device)
-        try:
-            return torch.nn.functional.grid_sample(data, batch_grid, mode=mode,
-                padding_mode=padding_mode, align_corners=True)
-        except:
-            # no align_corners in older pytorch.
-            return torch.nn.functional.grid_sample(data, batch_grid, mode=mode,
-                padding_mode=padding_mode)
+        return torch.nn.functional.grid_sample(data, batch_grid, mode=mode,
+                padding_mode=padding_mode, align_corners=False)
     return upsample_func
 
 def sequence_scale_offset(modulelist):
