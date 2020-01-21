@@ -70,7 +70,7 @@ class PaintWidget {
         self.model.set('mask', self.mask_canvas.toDataURL());
         return;
       }
-      var p = self.cursor_position();
+      var p = self.cursor_position(evt);
       self.fill_circle(p.x, p.y,
           self.model.get('brushsize'),
           self.model.get('erase'));
