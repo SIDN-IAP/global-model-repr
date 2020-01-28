@@ -151,8 +151,12 @@ class Widget(Model):
         self._viewcount = 0
         # Python notification is handled by Property objects.
         def handle_remote_set(name, value):
-            self.prop(name).trigger(value)
+            with capture_output(self): # make errors visible.
+                self.prop(name).trigger(value)
         self._recv_from_js_(handle_remote_set)
+        # Each widget has a "write" event that is used to insert
+        # html before the widget.
+        self.write = Trigger()
 
     def widget_js(self):
         '''
@@ -193,6 +197,13 @@ class Widget(Model):
         {WIDGET_MODEL_JS}
         var model = new Model("{id(self)}", {json_data});
         var element = document.getElementById("{self.view_id()}");
+        model.on('write', (html) => {{
+          var dummy = document.createElement('div');
+          dummy.innerHTML = html.trim();
+          dummy.childNodes.forEach((item) => {{
+            element.parentNode.insertBefore(item, element);
+          }});
+        }});
         {self.widget_js()}
         }})();
         </script>
@@ -356,6 +367,34 @@ class Property(Trigger):
         else:
             self.trigger(value)
 
+class capture_output(object):
+    """Context manager for capturing stdout/stderr.  This is used,
+    by default, to wrap handler code that is invoked by a triggering
+    event coming from javascript.  Any stdout/stderr or exceptions
+    that are thrown are formatted and written above the relevant widget."""
+    def __init__(self, widget):
+        from io import StringIO
+        self.widget = widget
+        self.buffer = StringIO()
+    def __enter__(self):
+        import sys
+        self.saved = dict(stdout=sys.stdout, stderr=sys.stderr)
+        sys.stdout = self.buffer
+        sys.stderr = self.buffer
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        import sys, traceback
+        captured = self.buffer.getvalue()
+        if len(captured):
+            self.widget.write.trigger(f'<pre>{html.escape(captured)}</pre>')
+        if exc_type:
+            import traceback
+            tbtxt = ''.join(
+                    traceback.format_exception(exc_type, exc_value, exc_tb))
+            self.widget.write.trigger(
+                    f'<pre style="color:red">{tbtxt}</pre>')
+        sys.stdout = self.saved['stdout']
+        sys.stderr = self.saved['stderr']
+
 
 ##########################################################################
 ## Specific widgets
@@ -505,6 +544,10 @@ class Choice(Widget):
 
 
 class Div(Widget):
+    """
+    Just an empty DIV element.  Use the innerHTML property to
+    change its contents, or use the clear() and print() method.
+    """
     def __init__(self, innerHTML='', style=None, data=None):
         super().__init__()
         style = {} if style is None else style
@@ -515,7 +558,12 @@ class Div(Widget):
         self.style = Property(style)
         self.click = Trigger()
 
+    def clear(self):
+        """Clears the contents of the div."""
+        self.innerHTML = ''
+
     def print(self, *args, replace=False):
+        """Appends plain text (as a pre) into the div."""
         newHTML = '<pre>%s</pre>' % ' '.join(
                 html.escape(str(text)) for text in args)
         if replace:
