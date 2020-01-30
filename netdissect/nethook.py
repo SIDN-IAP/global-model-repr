@@ -5,7 +5,7 @@ InstrumentedModel will wrap a pytorch model and allow hooking
 arbitrary layers to monitor or modify their output directly.
 '''
 
-import torch, numpy, types, copy
+import torch, numpy, types, copy, inspect
 from collections import OrderedDict, defaultdict
 
 class InstrumentedModel(torch.nn.Module):
@@ -230,7 +230,8 @@ class InstrumentedModel(torch.nn.Module):
         # Apply any edits requested.
         rule = self._editrule.get(aka, None)
         if rule is not None:
-            x = rule(x, self, **(self._editargs[aka]))
+            x = invoke_with_optional_args(
+                rule, x, self, **(self._editargs[aka]))
         return x
 
     def _hook_sequential(self):
@@ -359,3 +360,12 @@ def set_requires_grad(requires_grad, *models):
             model.requires_grad = requires_grad
         else:
             assert False, 'unknown type %r' % type(model)
+
+def invoke_with_optional_args(fn, *args, *kwargs):
+    argspec = inspect.getargspec(rule)
+    if argspec.keywords is None:
+        kwargs = {k: v for k, v in kwargs.items()
+                if k in argspec.args}
+    if argspec.varargs is None:
+        args = args[:len(argspec.args) - len(argspec.defaults)]
+    return fn(*args, **kwargs)
