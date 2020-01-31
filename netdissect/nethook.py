@@ -231,7 +231,7 @@ class InstrumentedModel(torch.nn.Module):
         rule = self._editrule.get(aka, None)
         if rule is not None:
             x = invoke_with_optional_args(
-                rule, x, self, **(self._editargs[aka]))
+                rule, x, self, name=aka, **(self._editargs[aka]))
         return x
 
     def _hook_sequential(self):
@@ -361,11 +361,14 @@ def set_requires_grad(requires_grad, *models):
         else:
             assert False, 'unknown type %r' % type(model)
 
-def invoke_with_optional_args(fn, *args, *kwargs):
-    argspec = inspect.getargspec(rule)
-    if argspec.keywords is None:
+def invoke_with_optional_args(fn, *args, **kwargs):
+    argspec = inspect.getfullargspec(fn)
+    kwtaken = 0
+    if argspec.varkw is None:
+        kwtaken = len([k for k in kwargs if k in argspec.args])
         kwargs = {k: v for k, v in kwargs.items()
-                if k in argspec.args}
+                if k in argspec.args or
+                argspec.kwonlyargs and k in argspec.kwonlyargs}
     if argspec.varargs is None:
-        args = args[:len(argspec.args) - len(argspec.defaults)]
+        args = args[:len(argspec.args) - kwtaken]
     return fn(*args, **kwargs)
