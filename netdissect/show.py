@@ -49,6 +49,12 @@ def blocks_tags(obj):
     elif isinstance(obj, dict):
         results.extend(blocks_tags([(k, v) for k, v in obj.items()]))
     elif hasattr(obj, '__iter__'):
+        if hasattr(obj, 'tolist'):
+            # Handle numpy/pytorch tensors as lists.
+            try:
+                obj = obj.tolist()
+            except:
+                pass
         blockstart, blockend, tstart, tend, rstart, rend, cstart, cend = [
           '<div style="display:inline-block;text-align:center;line-height:1;' +
               'vertical-align:top;padding:1px">',
