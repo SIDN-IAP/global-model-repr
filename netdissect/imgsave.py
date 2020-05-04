@@ -57,3 +57,6 @@ class SaveImageWorker(WorkerBase):
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         img.save(filename, optimize=True, quality=quality)
 
+class SaveImagePool(WorkerPool):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, worker=SaveImageWorker, **kwargs)

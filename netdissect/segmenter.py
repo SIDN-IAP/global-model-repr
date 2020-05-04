@@ -613,7 +613,7 @@ def load_segmentation_model(modeldir, segmodel_arch, segvocab, epoch=None):
     return segmodel
 
 def ensure_segmenter_downloaded(directory, segvocab):
-    baseurl = 'http://netdissect.csail.mit.edu/data/segmodel'
+    baseurl = 'https://dissect.csail.mit.edu/models/segmodel'
     if segvocab == 'upp':
         dirname = 'upp-resnet50-upernet'
         files = ['decoder_epoch_40.pth', 'encoder_epoch_40.pth', 'labels.json']

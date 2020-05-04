@@ -52,6 +52,7 @@ class ParallelImageFolders(data.Dataset):
             classification=False,
             intersection=False,
             filter_tuples=None,
+            normalize_filename=None,
             verbose=None,
             size=None,
             shuffle=None,
@@ -68,13 +69,14 @@ class ParallelImageFolders(data.Dataset):
                         classification=classification,
                         intersection=intersection,
                         filter_tuples=filter_tuples,
+                        normalize_fn=normalize_filename,
                         verbose=verbose))
             if len(self.images) == 0:
                 raise RuntimeError("Found 0 images within: %s" % image_roots)
             if shuffle is not None:
                 random.Random(shuffle).shuffle(self.images)
             if size is not None:
-                self.image = self.images[:size]
+                self.images = self.images[:size]
             self._do_lazy_init = None
         # Do slow initialization lazily.
         if lazy_init:
@@ -146,16 +148,19 @@ def walk_image_files(rootdir, verbose=None):
     return result
 
 def make_parallel_dataset(image_roots, classification=False,
-        intersection=False, filter_tuples=None, verbose=None):
+        intersection=False, filter_tuples=None, normalize_fn=None,
+        verbose=None):
     """
     Returns ([(img1, img2, clsid), (img1, img2, clsid)..],
              classes, class_to_idx)
     """
     image_roots = [os.path.expanduser(d) for d in image_roots]
     image_sets = OrderedDict()
+    if normalize_fn is None:
+        normalize_fn = lambda x: os.path.splitext(x)[0]
     for j, root in enumerate(image_roots):
         for path in walk_image_files(root, verbose=verbose):
-            key = os.path.splitext(os.path.relpath(path, root))[0]
+            key = normalize_fn(os.path.relpath(path, root))
             if key not in image_sets:
                 image_sets[key] = []
             if not intersection and len(image_sets[key]) != j:

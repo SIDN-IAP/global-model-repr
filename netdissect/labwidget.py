@@ -13,9 +13,11 @@ This module also defines Label, Textbox, Range, Choice, and Div
 widgets; the code for these are good examples of usage of Widget,
 Trigger, and Property objects.
 
-User interaction should update the javascript model using
-model.set('propname', value); this will propagate to the python
-model and notify any registered python listeners.
+Within HTML widgets, user interaction should update the javascript
+model using model.set('propname', value); this will propagate to
+the python model and notify any registered python listeners; similarly
+model.on('propname', callback) will listen for property changes
+that come from python.
 
 TODO: Support jupyterlab also.
 """
@@ -49,7 +51,7 @@ class Model(object):
             self.prop(n).on(cb)
         return self
 
-    def off(self, name, cb):
+    def off(self, name, cb=None):
         '''
         Unregisters a listener for named events and properties.
         A space-separated list of names can be provided as `name`.
@@ -74,6 +76,8 @@ class Model(object):
         To be overridden in base classes.  Handles initialization of
         a new Trigger or Property member.
         '''
+        value.name = name
+        value.target = self
         return
 
     def __setattr__(self, name, value):
@@ -139,9 +143,14 @@ class Widget(Model):
         js model.set ->           |        -> js.model.on  callback
           python prop.trigger ->  |   -> python prop.notify
                          python prop.handle
+
+    Finally, all widgets provide standard databinding for style and data
+    properties, which are write-only (python-to-js) properties that
+    let python directly control CSS styles and HTML dataset attributes
+    for the top-level widget element.
     '''
 
-    def __init__(self):
+    def __init__(self, style=None, data=None):
         # In the jupyter case, there can be some delay between js injection
         # and comm creation, so we need to queue some initial messages.
         if WIDGET_ENV == 'jupyter':
@@ -154,6 +163,10 @@ class Widget(Model):
             with capture_output(self): # make errors visible.
                 self.prop(name).trigger(value)
         self._recv_from_js_(handle_remote_set)
+        # The style and data properties come standard, and are used to
+        # control the style and data attributes on the toplevel element.
+        self.style = Property(style)
+        self.data = Property(data)
         # Each widget has a "write" event that is used to insert
         # html before the widget.
         self.write = Trigger()
@@ -172,7 +185,7 @@ class Widget(Model):
         Override to define the initial HTML view of the widget.  Should
         define an element with id given by view_id().
         '''
-        return f'<div id="{self.view_id()}"></div>'
+        return f'<div {self.std_attrs()}></div>'
 
     def view_id(self):
         '''
@@ -180,6 +193,16 @@ class Widget(Model):
         Note that each time _repr_html_ is called, this id will change.
         '''
         return f"_{id(self)}_{self._viewcount}"
+
+    def std_attrs(self):
+        '''
+        Returns id and (if applicable) style attributes, escaped and
+        formatted for use within the top-level element of widget HTML.
+        '''
+        return (f'id="{self.view_id()}"' +
+                style_attr(self.style) +
+                data_attrs(self.data))
+
 
     def _repr_html_(self):
         '''
@@ -190,41 +213,50 @@ class Widget(Model):
                 k: v.value for k, v in vars(self).items()
                 if isinstance(v, Property)})
         json_data = re.sub('</', '<\\/', json_data)
-        return f"""
-        {self.widget_html()}
-        <script>
-        (function() {{
-        {WIDGET_MODEL_JS}
-        var model = new Model("{id(self)}", {json_data});
-        var element = document.getElementById("{self.view_id()}");
-        model.on('write', (html) => {{
-          var dummy = document.createElement('div');
-          dummy.innerHTML = html.trim();
-          dummy.childNodes.forEach((item) => {{
-            element.parentNode.insertBefore(item, element);
+
+        std_widget_js = minify(f'''
+          var model = new Model("{id(self)}", {json_data});
+          var element = document.getElementById("{self.view_id()}");
+          model.on('write', (ev) => {{
+            var dummy = document.createElement('div');
+            dummy.innerHTML = ev.value.trim();
+            dummy.childNodes.forEach((item) => {{
+              element.parentNode.insertBefore(item, element);
+            }});
           }});
-        }});
-        {self.widget_js()}
-        }})();
-        </script>
-        """
+          function upd(a) {{ return (e) => {{ for (k in e.value) {{
+            element[a][k] = e.value[k];
+          }}}}}}
+          model.on('style', upd('style'));
+          model.on('data', upd('dataset'));
+        ''')
+
+        return ''.join([
+          self.widget_html(),
+          '<script>(function() {',
+          WIDGET_MODEL_JS,
+          std_widget_js,
+          self.widget_js(),
+          '})();</script>'
+        ]);
 
     def _initprop_(self, name, value):
         if not hasattr(self, '_viewcount'):
             raise ValueError('base Model __init__ must be called')
-        def notify_js(value):
-            self._send_to_js_(id(self), name, value)
+        super()._initprop_(name, value)
+        def notify_js(event):
+            self._send_to_js_(id(self), name, event.value)
         if isinstance(value, Trigger):
-            value.on(notify_js)
+            value.on(notify_js, internal=True)
 
     def _send_to_js_(self, *args):
         if self._viewcount > 0:
             if WIDGET_ENV == 'colab':
-                colab_output.eval_js(f"""
+                colab_output.eval_js(minify(f"""
                 (window.send_{id(self)} = window.send_{id(self)} ||
                 new BroadcastChannel("channel_{id(self)}")
                 ).postMessage({json.dumps(args)});
-                """, ignore_result=True)
+                """), ignore_result=True)
             elif WIDGET_ENV == 'jupyter':
                 if not self._comms:
                     self._queue.append(args)
@@ -256,6 +288,11 @@ class Widget(Model):
             cname = "comm_" + str(id(self))
             COMM_MANAGER.register_target(cname, open_comm)
 
+    def display(self):
+        from IPython.core.display import display
+        display(self)
+        return self
+
 class Trigger(object):
     """
     Trigger is the base class for Property and other data-bound
@@ -274,6 +311,9 @@ class Trigger(object):
     def __init__(self):
         self._listeners = []
         self.parent = None
+        # name and target are set in Model._initprop_.
+        self.name = None
+        self.target = None
     def handle(self, value):
         '''
         Method to override; called at the root when an event has been
@@ -306,7 +346,7 @@ class Trigger(object):
                     raise ValueError('bound properties should not form a loop')
                 ancestor = ancestor.parent
             self.parent = value
-            self.parent.on(self.handle)
+            self.parent.on(self.handle, internal=True)
         elif not isinstance(self, Property):
             raise ValueError('only properties can be set to a value')
     def notify(self, value=None):
@@ -314,24 +354,28 @@ class Trigger(object):
         Notifies listeners and children.  If a listener accepts an argument,
         the value will be passed as a single argument.
         '''
-        for cb in self._listeners:
-            if len(signature(cb).parameters) == 0:
-                cb() # no-parameter callback.
-            else:
-                cb(value)
-            # TODO: consider adding a two-parameter callback form
-            # where a detailed event object can be added.
-    def on(self, cb):
+        for cb, internal in self._listeners:
+            with enter_handler(self.name, internal) as ctx:
+                if ctx.silence:
+                    # do not notify recursively...
+                    # print(f'silenced recursive {self.name} {cb.__name__}')
+                    pass
+                elif len(signature(cb).parameters) == 0:
+                    cb() # no-parameter callback.
+                else:
+                    cb(Event(value, self.name, self.target))
+    def on(self, cb, internal=False):
         '''
         Registers a listener.  Calling multiple times registers
         multiple listeners.
         '''
-        self._listeners.append(cb)
-    def off(self, cb):
+        self._listeners.append((cb, internal))
+    def off(self, cb=None):
         '''
         Unregisters a listener.
         '''
-        self._listeners = [c for c in self._listeners if c != cb]
+        self._listeners = [(c, i) for c, i in self._listeners
+                if c != cb and cb is not None]
 
 class Property(Trigger):
     """
@@ -367,6 +411,31 @@ class Property(Trigger):
         else:
             self.trigger(value)
 
+class Event(object):
+    def __init__(self, value, name, target, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        self.value = value
+        self.name = name
+        self.target = target
+
+entered_handler_stack = []
+class enter_handler(object):
+    def __init__(self, name, internal):
+        global entered_handler_stack
+        self.internal = internal
+        self.name = name
+        self.silence = (not internal) and (len(entered_handler_stack) > 0)
+    def __enter__(self):
+        global entered_handler_stack
+        if not self.internal:
+            entered_handler_stack.append(self)
+        return self
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        global entered_handler_stack
+        if not self.internal:
+            entered_handler_stack.pop()
+
 class capture_output(object):
     """Context manager for capturing stdout/stderr.  This is used,
     by default, to wrap handler code that is invoked by a triggering
@@ -391,7 +460,7 @@ class capture_output(object):
             tbtxt = ''.join(
                     traceback.format_exception(exc_type, exc_value, exc_tb))
             self.widget.write.trigger(
-                    f'<pre style="color:red">{tbtxt}</pre>')
+                    f'<pre style="color:red;text-align:left">{tbtxt}</pre>')
         sys.stdout = self.saved['stdout']
         sys.stderr = self.saved['stderr']
 
@@ -401,28 +470,26 @@ class capture_output(object):
 ##########################################################################
 
 class Button(Widget):
-    def __init__(self, label='button'):
-        super().__init__()
+    def __init__(self, label='button', style=None, **kwargs):
+        super().__init__(style=defaulted(style, display='block'), **kwargs)
         self.click = Trigger()
         self.label = Property(label)
     def widget_js(self):
-        return '''
+        return minify('''
           element.addEventListener('click', (e) => {
             model.trigger('click');
           })
-          model.on('label', (v) => {
-            element.value = v;
+          model.on('label', (ev) => {
+            element.value = ev.value;
           })
-        '''
+        ''')
     def widget_html(self):
-        return f'''
-          <input id="{self.view_id()}" type="button" style="display:block"
-            value="{html.escape(str(self.label))}">
-        '''
+        return f'''<input {self.std_attrs()} type="button" value="{
+            html.escape(str(self.label))}">'''
 
 class Label(Widget):
-    def __init__(self, value=''):
-        super().__init__()
+    def __init__(self, value='', **kwargs):
+        super().__init__(**kwargs)
         # databinding is defined using Property objects.
         self.value = Property(value)
 
@@ -430,28 +497,28 @@ class Label(Widget):
         # Both "model" and "element" objects are defined within the scope
         # where the js is run.    "element" looks for the element with id
         # self.view_id(); if widget_html is overridden, this id should be used.
-        return '''
-            model.on('value', (value) => {
+        return minify('''
+            model.on('value', (ev) => {
                 element.innerText = model.get('value');
             });
-        '''
+        ''')
     def widget_html(self):
-        return f'''
-        <label id="{self.view_id()}">{html.escape(str(self.value))}</label>
-        '''
+        return f'''<label {self.std_attrs()}>{
+            html.escape(str(self.value))}</label>'''
 
 class Textbox(Widget):
-    def __init__(self, value='', size=20):
-        super().__init__()
+    def __init__(self, value='', size=20, style=None, desc=None, **kwargs):
+        super().__init__(style=defaulted(style, display='inline-block'), **kwargs)
         # databinding is defined using Property objects.
         self.value = Property(value)
         self.size = Property(size)
+        self.desc = Property(desc)
 
     def widget_js(self):
         # Both "model" and "element" objects are defined within the scope
         # where the js is run.    "element" looks for the element with id
         # self.view_id(); if widget_html is overridden, this id should be used.
-        return '''
+        return minify('''
           element.value = model.get('value');
           element.size = model.get('size');
           element.addEventListener('keydown', (e) => {
@@ -459,22 +526,27 @@ class Textbox(Widget):
               model.set('value', element.value);
             }
           });
-          model.on('value', (value) => {
+          element.addEventListener('blur', (e) => {
+            model.set('value', element.value);
+          });
+          model.on('value', (ev) => {
             element.value = model.get('value');
           });
-          model.on('size', (value) => {
+          model.on('size', (ev) => {
             element.size = model.get('size');
           });
-        '''
+        ''')
     def widget_html(self):
-        return f'''
-          <input id="{self.view_id()}" style="display:block"
-             value="{html.escape(str(self.value))}" size="{self.size}">
-        '''
+
+        html_str = f'''<input {self.std_attrs()} value="{
+            html.escape(str(self.value))}" size="{self.size}">'''
+        if self.desc is not None:
+            html_str = f"""<span>{self.desc}</span>{html_str}"""
+        return html_str
 
 class Range(Widget):
-    def __init__(self, value=50, min=0, max=100):
-        super().__init__()
+    def __init__(self, value=50, min=0, max=100, **kwargs):
+        super().__init__(**kwargs)
         # databinding is defined using Property objects.
         self.value = Property(value)
         self.min = Property(min)
@@ -483,25 +555,27 @@ class Range(Widget):
     def widget_js(self):
         # Note that the 'input' event would enable during-drag feedback,
         # but this is pretty slow on google colab.
-        return '''
+        return minify('''
           element.addEventListener('change', (e) => {
             model.set('value', element.value);
           });
-          model.on('value', (value) => {
+          model.on('value', (e) => {
             if (!element.matches(':active')) {
-              element.value = value;
+              element.value = e.value;
             }
           })
-        '''
+        ''')
     def widget_html(self):
-        return f'''
-          <input id="{self.view_id()}" type="range"
-             value="{self.value}" min="{self.min}" max="{self.max}">
-        '''
+        return f'''<input {self.std_attrs()} type="range" value="{
+            self.value}" min="{self.min}" max="{self.max}">'''
 
 class Choice(Widget):
-    def __init__(self, choices=None, selection=None, horizontal=False):
-        super().__init__()
+    """
+    A set of radio button choices.
+    """
+    def __init__(self, choices=None, selection=None, horizontal=False,
+            **kwargs):
+        super().__init__(**kwargs)
         if choices is None:
             choices = []
         self.choices = Property(choices)
@@ -510,13 +584,12 @@ class Choice(Widget):
     def widget_js(self):
         # Note that the 'input' event would enable during-drag feedback,
         # but this is pretty slow on google colab.
-        return '''
+        return minify('''
           function esc(unsafe) {
             return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;")
                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
           }
           function render() {
-            console.log('rendering');
             var lines = model.get('choices').map((c) => {
               return '<label><input type="radio" name="choice" value="' +
                  esc(c) + '">' + esc(c) + '</label>'
@@ -524,15 +597,15 @@ class Choice(Widget):
             element.innerHTML = lines.join(model.get('horizontal')?' ':'<br>');
           }
           model.on('choices horizontal', render);
-          model.on('selection', (selection) => {
+          model.on('selection', (ev) => {
             [...element.querySelectorAll('input')].forEach((e) => {
-              e.checked = (e.value == selection);
+              e.checked = (e.value == ev.value);
             })
           });
           element.addEventListener('change', (e) => {
             model.set('selection', element.choice.value);
           });
-        '''
+        ''')
     def widget_html(self):
         radios = [
             f"""<label><input name="choice" type="radio" {
@@ -540,27 +613,133 @@ class Choice(Widget):
             } value="{html.escape(value)}">{html.escape(value)}</label>"""
             for value in self.choices ]
         sep = " " if self.horizontal else "<br>"
-        return f'<form id="{self.view_id()}">{sep.join(radios)}</form>'
+        return f'<form {self.std_attrs()}>{sep.join(radios)}</form>'
 
+class Menu(Widget):
+    """
+    A dropdown choice.
+    """
+    def __init__(self, choices=None, selection=None, **kwargs):
+        super().__init__(**kwargs)
+        if choices is None:
+            choices = []
+        self.choices = Property(choices)
+        self.selection = Property(selection)
+    def widget_js(self):
+        return minify('''
+          function esc(unsafe) {
+            return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                   .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+          }
+          function render() {
+            var selection = model.get('selection');
+            var lines = model.get('choices').map((c) => {
+              return '<option value="' + esc(''+c) + '"' +
+                     (c == selection ? ' selected' : '') +
+                     '>' + esc(''+c) + '</option>';
+            });
+            element.menu.innerHTML = lines.join('\\n');
+          }
+          model.on('choices horizontal', render);
+          model.on('selection', (ev) => {
+            [...element.querySelectorAll('option')].forEach((e) => {
+              e.selected = (e.value == ev.value);
+            })
+          });
+          element.addEventListener('change', (e) => {
+            model.set('selection', element.menu.value);
+          });
+        ''')
+    def widget_html(self):
+        options = [
+            f"""<option value="{html.escape(str(value))}" {
+            'selected' if value == self.selection else ''
+            }>{html.escape(str(value))}</option>"""
+            for value in self.choices ]
+        sep = "\n"
+        return f'''<form {self.std_attrs()}"><select name="menu">{
+             sep.join(options)}</select></form>'''
+
+class Datalist(Widget):
+    """
+    An input with a dropdown choice.
+    """
+    def __init__(self, choices=None, value=None, **kwargs):
+        super().__init__(**kwargs)
+        if choices is None:
+            choices = []
+        self.choices = Property(choices)
+        self.value = Property(value)
+    def datalist_id(self):
+        return self.view_id() + '-dl'
+    def widget_js(self):
+        # The mousedown/mouseleave dance defeats the prefix-matching behavior
+        # of the built-in datalist by erasing value momentarily on mousedown.
+        return minify('''
+          function esc(unsafe) {
+            return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                   .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+          }
+          function render() {
+            var lines = model.get('choices').map((c) => {
+              return '<option value="' + esc(''+c) + '">';
+            });
+            element.inp.list.innerHTML = lines.join('\\n');
+          }
+          model.on('choices', render);
+          model.on('value', (ev) => {
+            element.inp.value = ev.value;
+          });
+          function restoreValue() {
+            var inp = element.inp;
+            if (inp.value == '') {
+              inp.value = inp.placeholder;
+              inp.placeholder = '';
+            }
+          }
+          element.inp.addEventListener('mousedown', (e) => {
+            var inp = element.inp;
+            if (inp.value != '') {
+              inp.placeholder = inp.value;
+              inp.value = '';
+              if (e.clientX < inp.getBoundingClientRect().right - 25) {
+                setTimeout(restoreValue, 0);
+              }
+            }
+          });
+          element.inp.addEventListener('mouseleave', restoreValue)
+          element.inp.addEventListener('change', (e) => {
+            model.set('value', element.inp.value);
+          });
+        ''')
+    def widget_html(self):
+        options = [
+            f"""<option value="{html.escape(str(value))}">"""
+            for value in self.choices ]
+        return ''.join([
+          f'<form {self.std_attrs()} onsubmit="return false;">',
+          f'<input name="inp" list="{self.datalist_id()}" autocomplete="off">',
+          f'<datalist id="{self.datalist_id()}">',
+          ''.join(options),
+          f'</datalist></form>'])
 
 class Div(Widget):
     """
     Just an empty DIV element.  Use the innerHTML property to
     change its contents, or use the clear() and print() method.
     """
-    def __init__(self, innerHTML='', style=None, data=None):
-        super().__init__()
-        style = {} if style is None else style
-        data = {} if data is None else data
-        # TODO: convert non-string innerHTML objects to html; unify
-        # with the show() library.
+    def __init__(self, innerHTML='', **kwargs):
+        super().__init__(**kwargs)
+        # TODO: unify more closely with the show() library.
         self.innerHTML = Property(innerHTML)
-        self.style = Property(style)
-        self.click = Trigger()
 
     def clear(self):
         """Clears the contents of the div."""
         self.innerHTML = ''
+
+    def show(self, *args):
+        from . import show
+        self.innerHTML = show.html(args)
 
     def print(self, *args, replace=False):
         """Appends plain text (as a pre) into the div."""
@@ -574,16 +753,9 @@ class Div(Widget):
     def widget_js(self):
         # Note that if we want innerHTML to support script execution,
         # we need to do it explicitly, like this.
-        return '''
-          function updater(attr) {
-            return (val) => { for (k in val) { element[attr][k] = val[k]; } }
-          }
-          model.on('style', updater('style'));
-          updater('style')();
-          model.on('data', updater('dataset'));
-          updater('dataset')();
-          model.on('innerHTML', (innerHTML) => {
-            element.innerHTML = innerHTML;
+        return minify('''
+          model.on('innerHTML', (ev) => {
+            element.innerHTML = ev.value;
             Array.from(element.querySelectorAll("script")).forEach(old=>{
               const newScript = document.createElement("script");
               Array.from(old.attributes).forEach(attr =>
@@ -592,11 +764,9 @@ class Div(Widget):
               old.parentNode.replaceChild(newScript, old);
             });
           });
-        '''
+        ''')
     def widget_html(self):
-        return f'''
-          <div id="{self.view_id()}">{self.innerHTML}</div>
-        '''
+        return f'''<div {self.std_attrs()}>{self.innerHTML}</div>'''
 
 class ClickDiv(Div):
     '''
@@ -604,12 +774,12 @@ class ClickDiv(Div):
     If a clicked element contains a data-click value, then that value is
     sent as the click event value.
     '''
-    def __init__(self, innerHTML='', style=None, data=None):
-        super().__init__(innertHTML, style, data)
+    def __init__(self, innerHTML='', **kwargs):
+        super().__init__(innertHTML, **kwargs)
         self.click = Trigger()
 
     def widget_js(self):
-        return super().widget_js() + '''
+        return super().widget_js() + minify('''
           element.addEventListener('click', (ev) => {
             var target = ev.target;
             while (target && target != element && !target.dataset.click) {
@@ -618,7 +788,70 @@ class ClickDiv(Div):
             var value = target.dataset.click;
             model.trigger('click', value);
           });
-        '''
+        ''')
+
+class Image(Widget):
+    """
+    Just a IMG element.  Use the src property to change its contents by url,
+    or use the clear() and render(imgdata) methods to convert PIL or
+    tensor image data to a url to display.
+    """
+    def __init__(self, src='', style=None, **kwargs):
+        super().__init__(style=defaulted(style, margin=0), **kwargs)
+        self.src = Property(src)
+        self.click = Trigger()
+
+    def clear(self):
+        """Clears the image."""
+        self.src = ''
+
+    def render(self, imgdata, source=None):
+        """Converts a pil image or some tensor to a url to show inline."""
+        from . import renormalize
+        self.src = renormalize.as_url(imgdata, source=source)
+
+    def widget_js(self):
+        return minify('''
+          model.on('src', (ev) => { element.src = ev.value; });
+          element.addEventListener('click', (ev) => {
+            model.trigger('click');
+          });
+        ''')
+
+    def widget_html(self):
+        return f'''<img {self.std_attrs()} src="{html.escape(self.src)}">'''
+
+##########################################################################
+## Utils
+##########################################################################
+
+def minify(t):
+    # TODO: plug in some more real minification.
+    return re.sub(r'\n\s*', '\n', t)
+
+def style_attr(d):
+    if not d:
+        return ''
+    return ' style="%s"' % html.escape(css_style_from_dict(d))
+
+def data_attrs(d):
+    if not d:
+        return ''
+    return ''.join([
+        ' data-%s="%s"' % (k, html.escape(str(v))) for k, v in d.items()])
+
+def css_style_from_dict(d):
+    return ';'.join(
+            re.sub('([A-Z]+)', r'-\1',k).lower() + ':' +
+            re.sub('([][\\!"#$%&\'()*+,./:;<=>?@^`{|}~])', r'\\\1', str(v))
+        for k, v in d.items())
+
+def defaulted(d, **kwargs):
+    if d is None:
+        return kwargs
+    result = dict(kwargs)
+    result.update(d)
+    return result
 
 ##########################################################################
 ## Implementation Details
@@ -687,7 +920,7 @@ function sendToPython(obj_id, ...args) {
 """
 
 
-WIDGET_MODEL_JS = SEND_RECV_JS + """
+WIDGET_MODEL_JS = minify(SEND_RECV_JS + """
 class Model {
   constructor(obj_id, init) {
     this._id = obj_id;
@@ -695,8 +928,9 @@ class Model {
     this._data = Object.assign({}, init)
     recvFromPython(this._id, (name, value) => {
       this._data[name] = value;
+      var e = new Event(name); e.value = value;
       if (this._listeners.hasOwnProperty(name)) {
-        this._listeners[name].forEach((fn) => { fn(value); });
+        this._listeners[name].forEach((fn) => { fn(e); });
       }
     })
   }
@@ -728,4 +962,4 @@ class Model {
     });
   }
 }
-"""
+""")

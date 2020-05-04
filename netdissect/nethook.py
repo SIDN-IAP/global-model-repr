@@ -245,6 +245,7 @@ class InstrumentedModel(torch.nn.Module):
         self._old_forward['.'] = (model, '.',
                 model.__dict__.get('forward', None))
         def new_forward(this, x, layer=None, first_layer=None, last_layer=None):
+            # TODO: decide whether to support hierarchical names here.
             assert layer is None or (first_layer is None and last_layer is None)
             first_layer, last_layer = [str(layer) if layer is not None
                     else str(d) if d is not None else None
@@ -309,47 +310,85 @@ def make_matching_tensor(valuedict, name, data):
     return v
 
 def subsequence(sequential, first_layer=None, last_layer=None,
-        upto_layer=None, single_layer=None,
+        after_layer=None, upto_layer=None, single_layer=None,
         share_weights=False):
     '''
     Creates a subsequence of a pytorch Sequential model, copying over
     modules together with parameters for the subsequence.  Only
-    modules from first_layer to last_layer (inclusive) are included.
+    modules from first_layer to last_layer (inclusive) are included,
+    or modules between after_layer and upto_layer (exclusive).
+    Handles descent into dotted layer names as long as all references
+    are within nested Sequential models.
 
     If share_weights is True, then references the original modules
     and their parameters without copying them.  Otherwise, by default,
     makes a separate brand-new copy.
     '''
     assert ((single_layer is None) or
-            (first_layer is last_layer is upto_layer is None))
-    assert (last_layer is None) or (upto_layer is None)
+            (first_layer is last_layer is after_layer is upto_layer is None))
     if single_layer is not None:
         first_layer = single_layer
         last_layer = single_layer
+    first, last, after, upto = [None if d is None else d.split('.')
+            for d in [first_layer, last_layer, after_layer, upto_layer]]
+    return hierarchical_subsequence(sequential, first=first, last=last,
+            after=after, upto=upto, share_weights=share_weights)
+
+def hierarchical_subsequence(sequential, first, last, after, upto,
+        share_weights=False, depth=0):
+    '''
+    Recursive helper for subsequence() to support descent into dotted
+    layer names.  In this helper, first, last, after, and upto are
+    arrays of names resulting from splitting on dots.  Can only
+    descend into nested Sequentials.
+    '''
+    assert (last is None) or (upto is None)
+    assert (first is None) or (after is None)
+    if first is last is after is upto is None:
+        return sequential if share_weights else copy.deepcopy(sequential)
+    assert isinstance(sequential, torch.nn.Sequential), ('.'.join(
+        (first or last or after or upto)[:depth] or 'arg') + ' not Sequential')
+    including_children = (first is None) and (after is None)
     included_children = OrderedDict()
-    including_children = (first_layer is None)
+    (F, FN), (L, LN), (A, AN), (U, UN) = [
+            (d[depth], (None if len(d) == depth+1 else d))
+            if d is not None else (None, None)
+            for d in [first, last, after, upto]]
     for name, layer in sequential._modules.items():
-        if name == first_layer:
-            first_layer = None
+        if name == F:
+            first = None
             including_children = True
-        if name == upto_layer:
-            upto_layer = None
+        if name == A and AN is not None:
+            after = None
+            including_children = True
+        if name == U and UN is None:
+            upto = None
             including_children = False
         if including_children:
-            included_children[name] = layer if share_weights else (
-                    copy.deepcopy(layer))
-        if name == last_layer:
-            last_layer = None
+            FR, LR, AR, UR = [n if n is None or n[depth] == name else None
+                    for n in [FN, LN, AN, UN]]
+            chosen = hierarchical_subsequence(layer,
+                    first=FR, last=LR, after=AR, upto=UR,
+                    share_weights=share_weights, depth=depth+1)
+            if chosen is not None:
+                included_children[name] = chosen
+        if name == L:
+            last = None
             including_children = False
-    if first_layer is not None:
-        raise ValueError('Layer %s not found' % first_layer)
-    if last_layer is not None:
-        raise ValueError('Layer %s not found' % last_layer)
-    if upto_layer is not None:
-        raise ValueError('Layer %s not found' % upto_layer)
-    # if not len(included_children):
-    #    raise ValueError('Empty subsequence')
-    return torch.nn.Sequential(OrderedDict(included_children))
+        if name == U and UN is not None:
+            upto = None
+            including_children = False
+        if name == A and AN is None:
+            after = None
+            including_children = True
+    for name in [first, last, after, upto]:
+        if name is not None:
+            raise ValueError('Layer %s not found' % '.'.join(name))
+    # Omit empty subsequences except at the outermost level,
+    # where we should not return None.
+    if not len(included_children) and depth > 0:
+        return None
+    return torch.nn.Sequential(included_children)
 
 def set_requires_grad(requires_grad, *models):
     for model in models:

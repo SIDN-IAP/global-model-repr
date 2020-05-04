@@ -6,7 +6,11 @@ Utilities for showing progress bars, controlling default verbosity, etc.
 # just connect print_progress to print.
 import sys, types, builtins
 try:
-    from tqdm import tqdm, tqdm_notebook
+    from tqdm import tqdm
+    try:
+        from tqdm.notebook import tqdm as tqdm_nb
+    except:
+        from tqdm import tqdm_notebook as tqdm_nb
 except:
     tqdm = None
 
@@ -129,7 +133,7 @@ def __call__(x, *args, **kwargs):
     if not default_verbosity or tqdm is None:
         return x
     if default_verbosity == True:
-        fn = tqdm_notebook if in_notebook() else tqdm_terminal
+        fn = tqdm_nb if in_notebook() else tqdm_terminal
     else:
         fn = default_verbosity
     if next_description is not None:

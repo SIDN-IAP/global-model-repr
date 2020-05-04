@@ -138,7 +138,7 @@ def upsample_grid(data_shape, target_shape, image_size=None,
                     for o, ns, ts in zip(offset, image_size, target_shape))
     # Pytorch needs target coordinates in terms of source coordinates [-1..1]
     ty, tx = (((torch.arange(ts, dtype=dtype, device=device) - o)
-                  * (2 / (s * (ss - 1))) - 1)
+                  * (2 / (s * max(1, (ss - 1)))) - 1)
         for ts, ss, s, o, in zip(target_shape, data_shape, scale, offset))
     # Whoa, note that grid_sample reverses the order y, x -> x, y.
     grid = torch.stack(

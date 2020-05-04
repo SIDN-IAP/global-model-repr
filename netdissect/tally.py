@@ -130,6 +130,31 @@ def tally_quantile(compute, dataset, sample_size=None, batch_size=10,
         save_cached_state(cachefile, rq, args)
         return rq
 
+def tally_topk_and_quantile(compute, dataset, sample_size=None,
+        batch_size=10, k=100, r=4096, cachefile=None, **kwargs):
+    '''
+    Computes both topk and quantile statistics in one pass over the
+    data.  The compute function should return a pair (first for topk
+    and second for quantile stats).
+    '''
+    with torch.no_grad():
+        args = dict(sample_size=sample_size, k=k, r=r)
+        cached_state = load_cached_state(cachefile, args)
+        cs = CombinedState(state=cached_state,
+                rtk=runningstats.RunningTopK(k=k),
+                rq=runningstats.RunningQuantile(r=r))
+        if cached_state is not None:
+            return cs.rtx, cs.rq
+        loader = make_loader(dataset, sample_size, batch_size, **kwargs)
+        for batch in pbar(loader):
+            sample_tk, sample_q = call_compute(compute, batch)
+            cs.rtk.add(sample_tk)
+            cs.rq.add(sample_q)
+        cs.rtk.to_('cpu')
+        cs.rq.to_('cpu')
+        save_cached_state(cachefile, cs, args)
+        return cs.rtk, cs.rq
+
 def tally_conditional_quantile(compute, dataset,
         sample_size=None, batch_size=1, gpu_cache=64, r=1024,
         cachefile=None, **kwargs):
@@ -364,6 +389,27 @@ def tally_cross_covariance(compute, dataset, sample_size=None, batch_size=10,
         save_cached_state(cachefile, rcov, args)
         return rcov
 
+def tally_second_moment(compute, dataset, sample_size=None, batch_size=10,
+        cachefile=None, **kwargs):
+    '''
+    Computes second_moment statistics for a large data sample that can
+    be computed from a dataset.  The compute function should return one
+    batch of samples as a (sample, unit)-dimension tensor.
+    '''
+    with torch.no_grad():
+        args = dict(sample_size=sample_size)
+        cached_state = load_cached_state(cachefile, args)
+        if cached_state is not None:
+            return runningstats.RunningSecondMoment(state=cached_state)
+        loader = make_loader(dataset, sample_size, batch_size, **kwargs)
+        r2mom = runningstats.RunningSecondMoment()
+        for batch in pbar(loader):
+            sample = call_compute(compute, batch)
+            r2mom.add(sample)
+        r2mom.to_('cpu')
+        save_cached_state(cachefile, r2mom, args)
+        return r2mom
+
 def batch_bincount(data, num_labels):
     '''
     Computes elementwise bincount on a batch of data.  The input tensor is
@@ -532,6 +578,34 @@ def make_loader(dataset, sample_size=None, batch_size=10, sampler=None,
             sampler=sampler,
             batch_size=batch_size,
             **kwargs)
+
+def push_key_prefix(prefix, d):
+    return {prefix + '.' + k: v for k, v in d.items()}
+
+def pull_key_prefix(prefix, d):
+    pd = prefix + '.'
+    lpd = len(pd)
+    return {k[lpd:]: v for k, v in d.items() if k.startswith(pd)}
+
+class CombinedState(object):
+    '''
+    An object that can load and save state_dict made up of a
+    hierarchy of objects that each have a state_dict.
+    '''
+    def __init__(self, state=None, **kwargs):
+        self._objs = kwargs
+        if state is not None:
+            for prefix, obj in self._objs.items():
+                objs.load_state_dict(pull_key_prefix(prefix, state))
+    def __getattr__(self, k):
+        if k in self._objs:
+            return self._objs[k]
+        raise AttributeError()
+    def state_dict(self):
+        result = {}
+        for prefix, obj in self._objs.items():
+            result.update(push_key_prefix(prefix, obj.state_dict()))
+        return result
 
 def load_cached_state(cachefile, args):
     if cachefile is None:

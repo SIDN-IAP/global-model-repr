@@ -5,6 +5,24 @@ making sure only one process is working on a job at once.
 
 import os, errno, socket, atexit, time, sys
 
+def exclusive_dirfn(*args):
+    '''
+    Convenience function to get exclusive access to an unfinished
+    experiment directory.  Exits the program if the directory is
+    already done or busy (using exit_of_job_done).  Otherwise,
+    returns a function creates filenames within that directory.
+    '''
+    directory = os.path.join(*[str(a) for a in args])
+    exit_if_job_done(directory)
+    def dirfn(*fn):
+        return os.path.join(directory, *fn)
+    dirfn.dir = directory
+    def done():
+        mark_job_done(directory)
+    dirfn.done = done
+    print('Working in %s' % directory)
+    return dirfn
+
 def exit_if_job_done(directory, redo=False, force=False, verbose=True):
     if pidfile_taken(os.path.join(directory, 'lockfile.pid'),
             force=force, verbose=verbose):

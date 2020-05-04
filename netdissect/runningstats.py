@@ -1037,6 +1037,55 @@ class RunningCovariance:
         self._mean = torch.from_numpy(dic['mean'])
         self.cmom2 = torch.from_numpy(dic['cmom2'])
 
+class RunningSecondMoment:
+    '''
+    Running computation. Use this when the entire non-centered 2nd-moment
+    "covariance-like" matrix is needed, and when the whole matrix fits
+    in the GPU.
+    '''
+    def __init__(self, state=None):
+        if state is not None:
+            self.set_state_dict(state)
+            return
+        self.count = 0
+        self.mom2 = None
+
+    def add(self, a):
+        if len(a.shape) == 1:
+            a = a[None, :]
+        # Initial batch reveals the shape of the data.
+        if self.count == 0:
+            self.mom2 = a.new(a.shape[1], a.shape[1]).zero_()
+        batch_count = a.shape[0]
+        # If more than 10 billion operations, divide into batches.
+        sub_batch = -(-(10 << 30) // (a.shape[1] * a.shape[1]))
+        # Update the covariance using the batch deviation
+        self.count += batch_count
+        progress_addbmm(self.mom2, a[:,:,None], a[:,None,:], sub_batch)
+
+    def cpu_(self):
+        self.mom2 = self.mom2.cpu()
+
+    def cuda_(self):
+        self.mom2 = self.mom2.cuda()
+
+    def to_(self, device):
+        self.mom2 = self.mom2.to(device)
+
+    def moment(self):
+        return self.mom2 / self.count
+
+    def state_dict(self):
+        return dict(
+                constructor=self.__module__ + '.' +
+                    self.__class__.__name__ + '()',
+                count=self.count,
+                mom2=self.mom2.cpu().numpy())
+
+    def set_state_dict(self, dic):
+        self.count = dic['count'].item()
+        self.mom2 = torch.from_numpy(dic['mom2'])
+
 class RunningBincount:
     '''
     Running bincount.  The counted array should be an integer type with
