@@ -229,7 +229,7 @@ class ImageVisualizer:
             if hasattr(unit, '__len__'):
                 unit = unit[1]
             return tuple(i.item() for i in self.actrange[unit])
-        return activations.min(), activations.max()
+        return activations.min().item(), activations.max().item()
 
     def level_for(self, activations, unit, percent_level=None):
         '''
