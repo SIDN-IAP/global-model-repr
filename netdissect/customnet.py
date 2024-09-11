@@ -6,7 +6,8 @@ import numpy, torch, math, os
 from torch import nn
 from collections import OrderedDict
 from torchvision.models import resnet
-from torchvision.models.alexnet import model_urls as alexnet_model_urls
+from torchvision.models.alexnet import AlexNet_Weights
+from torchvision.models.resnet import ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights
 
 class CustomResNet(nn.Module):
     '''
@@ -175,20 +176,20 @@ if __name__ == '__main__':
     # models can be loaded into each of the custom nets.
     print('Loading alexnet')
     model = CustomAlexNet()
-    model.load_state_dict(model_zoo.load_url(alexnet_model_urls['alexnet']))
+    model.load_state_dict(model_zoo.load_url(AlexNet_Weights.IMAGENET1K_V1.url))
     print('Loading resnet18')
     model = CustomResNet(18)
-    model.load_state_dict(model_zoo.load_url(resnet.model_urls['resnet18']))
+    model.load_state_dict(model_zoo.load_url(ResNet18_Weights.IMAGENET1K_V1.url))
     print('Loading resnet34')
     model = CustomResNet(34)
-    model.load_state_dict(model_zoo.load_url(resnet.model_urls['resnet34']))
+    model.load_state_dict(model_zoo.load_url(ResNet34_Weights.IMAGENET1K_V1.url))
     print('Loading resnet50')
     model = CustomResNet(50)
-    model.load_state_dict(model_zoo.load_url(resnet.model_urls['resnet50']))
+    model.load_state_dict(model_zoo.load_url(ResNet50_Weights.IMAGENET1K_V1.url))
     print('Loading resnet101')
     model = CustomResNet(101)
-    model.load_state_dict(model_zoo.load_url(resnet.model_urls['resnet101']))
+    model.load_state_dict(model_zoo.load_url(ResNet101_Weights.IMAGENET1K_V1.url))
     print('Loading resnet152')
     model = CustomResNet(152)
-    model.load_state_dict(model_zoo.load_url(resnet.model_urls['resnet152']))
+    model.load_state_dict(model_zoo.load_url(ResNet152_Weights.IMAGENET1K_V1.url))
 
